@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+
+VERSION='__VERSION__'
+BASE_URL="https://github.com/DevCoz/tower-agent/releases/download/$VERSION"
+die() { printf '%s\n' "Tower Agent: $*" >&2; exit 1; }
+
+[ "$(uname -s)" = Linux ] || die 'Linux is required.'
+[ "$(id -u)" = 0 ] || die 'Run this installer with sudo or as root.'
+case "$(uname -m)" in
+  x86_64|amd64) ARCH=amd64; SHA256='__AMD64_SHA256__' ;;
+  aarch64|arm64) ARCH=arm64; SHA256='__ARM64_SHA256__' ;;
+  *) die 'Supported architectures: amd64 and arm64.' ;;
+esac
+case "${1:-}" in install) ;; *) die 'Use: install --url HTTPS_ORIGIN --id UUID [--install-sing-box]' ;; esac
+command -v sha256sum >/dev/null 2>&1 || die 'sha256sum is required.'
+
+# Stage on the installation filesystem, so /tmp mounted noexec is supported.
+[ ! -L /opt ] && [ ! -L /opt/tower-agent ] || die 'Unexpected installation path.'
+mkdir -p /opt/tower-agent
+stage=$(mktemp -d /opt/tower-agent/.bootstrap.XXXXXX)
+trap 'rm -rf "$stage"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+chmod 700 "$stage"
+payload="$stage/tower-agent"
+url="$BASE_URL/tower-agent-linux-$ARCH"
+printf 'Downloading Tower Agent %s for linux/%s...\n' "$VERSION" "$ARCH"
+if command -v curl >/dev/null 2>&1; then
+  curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --connect-timeout 10 --max-time 180 "$url" -o "$payload"
+elif command -v wget >/dev/null 2>&1; then
+  wget -q -T 180 -O "$payload" "$url"
+else
+  die 'curl or wget is required.'
+fi
+printf '%s  %s\n' "$SHA256" "$payload" | sha256sum -c - >/dev/null || die 'SHA-256 mismatch; downloaded program was not executed.'
+chmod 700 "$payload"
+[ "$("$payload" version)" = "Tower Agent $VERSION (protocol 2)" ] || die 'Unexpected Agent version.'
+"$payload" "$@"

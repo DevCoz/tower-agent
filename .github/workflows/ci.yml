@@ -1,0 +1,38 @@
+name: Verify Agent
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - run: node scripts/build.mjs v1.0.0
+      - name: Verify static binaries and installer
+        run: |
+          file dist/tower-agent-linux-* | tee /tmp/tower-binaries.txt
+          test "$(grep -c 'statically linked' /tmp/tower-binaries.txt)" = 2
+          sh -n dist/install.sh
+          (cd dist && sha256sum -c checksums.txt)
+          go test -count=1 -run TestBootstrap ./...
+      - name: Exercise real Linux systemd and sing-box
+        run: sudo --preserve-env=PATH env TOWER_SYSTEMD_TEST=1 "$(command -v go)" test -count=1 -v -run TestSystemdLifecycle ./...
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tower-agent-binaries
+          path: dist/
+          retention-days: 7

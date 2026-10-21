@@ -1,0 +1,7 @@
+/dist/
+/.test-runtime/
+*.test
+*.exe
+.env
+.env.*
+*.log

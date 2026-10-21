@@ -1,0 +1,32 @@
+name: Release Agent
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: go vet ./... && go test -race -count=1 ./...
+      - run: node scripts/build.mjs "$RELEASE_VERSION"
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+      - run: sh -n dist/install.sh && (cd dist && sha256sum -c checksums.txt)
+      - run: go test -count=1 -run TestBootstrap ./...
+      - name: Exercise real Linux systemd and sing-box
+        run: sudo --preserve-env=PATH env TOWER_SYSTEMD_TEST=1 "$(command -v go)" test -count=1 -v -run TestSystemdLifecycle ./...
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_VERSION" dist/* --verify-tag --title "Tower Agent $RELEASE_VERSION" --notes-file RELEASE_NOTES.md
