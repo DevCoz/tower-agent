@@ -57,3 +57,7 @@ node scripts/build.mjs v1.0.0
 CI 在临时目录验证任务、安装回滚和下载校验，并在独立 Ubuntu runner 上使用真实 systemd / sing-box 验证实例生命周期。标签 `vX.Y.Z` 触发同样检查，成功后才发布 GitHub Release。
 
 安装与二进制分发方式参考 [cfsm-agent](https://github.com/huilang-me/cfsm-agent)；Tower 的实例编排与通信逻辑独立实现。
+
+## 许可证
+
+沿用 Tower Panel 的 GPL-3.0 许可证，完整条款见 [LICENSE](LICENSE)。Go Agent 从 Tower Panel 的实例管理实现迁出并重写。
