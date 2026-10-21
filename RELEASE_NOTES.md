@@ -1,6 +1,6 @@
 Go standalone Linux Agent for Tower Panel.
 
-- Linux amd64 and arm64 static binaries; no Python or Go runtime required.
+- Linux amd64 and arm64 static binaries.
 - SHA-256 verified installer and isolated sing-box 1.14.3 installation.
 - Scoped Agent authentication and protocol 2 polling.
 - Create, edit, roll back and delete isolated AEAD 2022 AES instances.

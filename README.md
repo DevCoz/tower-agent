@@ -1,6 +1,6 @@
 # Tower Agent
 
-Tower Panel 的独立 Linux Agent，使用 Go 编译为单文件程序。服务器无需安装 Python、Go 或 pip。
+Tower Panel 的独立 Linux Agent，通过 GitHub Releases 分发 Go 静态二进制。
 
 通过专用 Agent 令牌连接面板，管理隔离的 sing-box 实例：创建、修改、失败回滚、删除，以及任务结果上报。只支持 Shadowsocks AEAD 2022 AES-128-GCM / AES-256-GCM。
 
@@ -17,8 +17,6 @@ sudo sh tower-agent-install.sh install --install-sing-box --url 'https://YOUR-PA
 
 在终端隐藏输入提示处粘贴专用 Agent 令牌。不要把面板管理员密码、Cloudflare 或 GitHub 凭据填入此处。安装器先通过 `/api/agents/:id/probe` 验证令牌，再安装服务；不会在探测时领取任务。
 
-没有 Python 兼容安装器或自动迁移流程。已有 Agent 在面板选择“重新连接”，重新执行 Go 安装命令。安装过程不会删除实例目录，也不会卸载系统 Python。
-
 ## 运行与更新
 
 ```sh
@@ -27,7 +25,7 @@ sudo systemctl status tower-agent
 sudo journalctl -u tower-agent -f
 ```
 
-需要更新时重新运行指定 Release 的安装脚本。更新前下载、校验二进制；替换失败时恢复原 Agent 文件。不自动追踪不受控的远程版本，不从面板执行任意 shell 命令。
+需要更新时重新运行指定 Release 的安装脚本。更新前下载、校验二进制；替换失败时恢复原 Agent 文件。需要轮换连接令牌时，在面板选择“重新连接”并重新执行安装命令。
 
 | 内容 | 路径 |
 | --- | --- |
@@ -60,4 +58,4 @@ CI 在临时目录验证任务、安装回滚和下载校验，并在独立 Ubun
 
 ## 许可证
 
-沿用 Tower Panel 的 GPL-3.0 许可证，完整条款见 [LICENSE](LICENSE)。Go Agent 从 Tower Panel 的实例管理实现迁出并重写。
+使用 GPL-3.0 许可证，完整条款见 [LICENSE](LICENSE)。
