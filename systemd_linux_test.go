@@ -39,6 +39,11 @@ func TestSystemdLifecycle(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, done := context.WithTimeout(context.Background(), 30*time.Second)
 		defer done()
+		if t.Failed() {
+			// This runner uses only the synthetic test key, never user credentials.
+			journal, _ := runCommand(cleanupCtx, "journalctl", "-u", service, "--no-pager", "-n", "25")
+			t.Log("isolated test service journal:\n" + journal.stdout)
+		}
 		_, _ = runCommand(cleanupCtx, "systemctl", "stop", service)
 		_, _ = runCommand(cleanupCtx, "systemctl", "disable", service)
 		_ = os.Remove(filepath.Join(a.units, service))
