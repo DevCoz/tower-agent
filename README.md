@@ -18,7 +18,7 @@ sudo ./tower-agent-linux-amd64 install --url 'https://YOUR-PANEL.example' --id '
 
 安装先验证 HTTPS 面板和协议 4，再安装 Agent 自身。代理运行程序在首个服务任务中按需下载并校验固定 SHA-256，未知版本、架构或用户提供的下载地址不被接受。
 
-v3.0.0 为此版本的发布目标；执行 node scripts/build.mjs v3.0.0 只生成本地产物，不会创建 GitHub Release。必须完成 Linux CI 并发布产物后，面板安装命令才可使用。
+[v3.0.0 已发布](https://github.com/DevCoz/tower-agent/releases/tag/v3.0.0)，产物来自通过原生 Linux amd64 / arm64 验证的 CI。执行 node scripts/build.mjs v3.0.0 只生成本地产物；正式发布由手动触发的 CI 在两种架构验证通过后完成。
 
 ## 生命周期
 
