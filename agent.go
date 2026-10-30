@@ -16,7 +16,7 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
-	"strings"
+
 	"time"
 )
 
@@ -25,51 +25,73 @@ type config struct {
 	ID    string `json:"id"`
 	Token string `json:"token"`
 }
-type instanceConfig struct {
-	Port     int    `json:"port"`
-	Password string `json:"password"`
-	Method   string `json:"method"`
-	IPv6     bool   `json:"ipv6"`
+type serviceConfig struct {
+	RuntimeVersion string             `json:"runtimeVersion"`
+	Protocol       string             `json:"protocol"`
+	Version        string             `json:"version,omitempty"`
+	Certificate    *certificateConfig `json:"certificate,omitempty"`
+	Port           int                `json:"port"`
+	Password       string             `json:"password"`
+	Method         string             `json:"method"`
+	IPv6           bool               `json:"ipv6"`
 }
 type job struct {
-	instanceConfig
-	ID       string          `json:"id"`
-	Lease    string          `json:"lease"`
-	Revision int             `json:"revision"`
-	Action   string          `json:"action"`
-	Previous *instanceConfig `json:"previous,omitempty"`
-	Pending  *instanceConfig `json:"pending,omitempty"`
+	TaskID     string `json:"taskId"`
+	ConfigHash string `json:"configHash"`
+	serviceConfig
+	ID       string         `json:"id"`
+	Lease    string         `json:"lease"`
+	Revision int            `json:"revision"`
+	Action   string         `json:"action"`
+	Previous *serviceConfig `json:"previous,omitempty"`
+	Pending  *serviceConfig `json:"pending,omitempty"`
 }
 type report struct {
-	ID     string  `json:"id"`
-	Lease  string  `json:"lease"`
-	Status string  `json:"status"`
-	Error  *string `json:"error"`
+	CheckedAt      int64              `json:"checkedAt,omitempty"`
+	TaskID         string             `json:"taskId"`
+	ConfigHash     string             `json:"configHash"`
+	Restored       bool               `json:"restored"`
+	Revision       int                `json:"revision"`
+	Implementation string             `json:"implementation,omitempty"`
+	Certificate    *certificateReport `json:"certificate,omitempty"`
+	ID             string             `json:"id"`
+	Lease          string             `json:"lease"`
+	Status         string             `json:"status"`
+	Error          *string            `json:"error"`
 }
 type result struct {
 	stdout string
 	code   int
 }
 type agent struct {
+	progress                                         func(context.Context, job, string)
+	acknowledged                                     string
 	base, units, configFile, binaryFile, runtimeFile string
 	run                                              func(context.Context, ...string) (result, error)
 	port                                             func(int, bool) error
 	wait                                             func(context.Context, time.Duration) error
 	client                                           *http.Client
+	health                                           func(context.Context, job) error
+	certificateChecks                                map[string]time.Time
 }
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 var tokenPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var binaryPattern = regexp.MustCompile(`^/[A-Za-z0-9_./-]+$`)
-var versionPattern = regexp.MustCompile(`^sing-box version (\d+)\.(\d+)\.(\d+)(?:\s|$)`)
 
 func newAgent() *agent {
-	return &agent{base: "/var/lib/tower-panel/instances", units: "/etc/systemd/system", configFile: "/etc/tower-agent/config.json", binaryFile: "/opt/tower-agent/tower-agent", runtimeFile: "/opt/tower-agent/sing-box-1.14.3/sing-box", run: runCommand, port: checkPort, wait: waitContext,
+	a := &agent{base: "/var/lib/tower-panel/services", units: "/etc/systemd/system", configFile: "/etc/tower-agent/config.json", binaryFile: "/opt/tower-agent/tower-agent", runtimeFile: "/opt/tower-agent/sing-box-1.14.3/sing-box", run: runCommand, port: checkPort, wait: waitContext,
 		client: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	a.health = a.checkHealth
+	return a
 }
 
 func runCommand(ctx context.Context, args ...string) (result, error) {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	limit := 20 * time.Second
+	if filepath.Base(args[0]) == "certbot" {
+		limit = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	// Never log command output: sing-box diagnostics can contain passwords.
@@ -113,51 +135,6 @@ func waitContext(ctx context.Context, delay time.Duration) error {
 		return nil
 	}
 }
-func supportsRuntime(line string) bool {
-	m := versionPattern.FindStringSubmatch(line)
-	if m == nil {
-		return false
-	}
-	major, _ := strconv.Atoi(m[1])
-	minor, _ := strconv.Atoi(m[2])
-	patch, _ := strconv.Atoi(m[3])
-	return major > 1 || major == 1 && (minor > 14 || minor == 14 && patch >= 3)
-}
-func (a *agent) capabilities(ctx context.Context) (string, *string) {
-	if !rootLinux() {
-		return "", nil
-	}
-	binary := a.runtimeFile
-	if !exists(binary) {
-		binary, _ = exec.LookPath("sing-box")
-	}
-	if binary == "" {
-		return "", nil
-	}
-	binary, err := filepath.EvalSymlinks(binary)
-	if err != nil {
-		return "", nil
-	}
-	r, err := a.run(ctx, binary, "version")
-	if err != nil || r.code != 0 {
-		return "", nil
-	}
-	line := strings.SplitN(r.stdout, "\n", 2)[0]
-	if len(line) > 80 {
-		line = line[:80]
-	}
-	systemd, err := a.run(ctx, "systemctl", "--version")
-	fields := strings.Fields(systemd.stdout)
-	var systemdVersion int
-	if len(fields) > 1 {
-		systemdVersion, _ = strconv.Atoi(fields[1])
-	}
-	if err != nil || systemd.code != 0 || systemdVersion < 247 || !exists("/run/systemd/system") || !supportsRuntime(line) {
-		return "", &line
-	}
-	return binary, &line
-}
-
 func validateConfig(c config) error {
 	u, err := url.Parse(c.URL)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || !uuidPattern.MatchString(c.ID) || !tokenPattern.MatchString(c.Token) {
@@ -192,24 +169,39 @@ func (a *agent) request(ctx context.Context, c config, action string, payload, o
 	return nil
 }
 func (a *agent) poll(ctx context.Context, c config, previous *report) (*job, string, error) {
-	binary, runtimeVersion := a.capabilities(ctx)
+	capabilities := a.runtimeCapabilities(ctx)
+	binary := ""
+	if len(capabilities.Protocols) > 0 {
+		binary = a.runtimeFile
+	}
+	platform := "other"
+	if runtime.GOOS == "linux" {
+		platform = "linux"
+	}
 	payload := struct {
-		Platform string  `json:"platform"`
-		Capable  bool    `json:"capable"`
-		Version  *string `json:"version"`
-		Protocol int     `json:"protocol"`
-		Report   *report `json:"report,omitempty"`
-	}{runtime.GOOS, binary != "", runtimeVersion, 2, previous}
+		Platform     string                   `json:"platform"`
+		Capabilities runtimeCapabilities      `json:"capabilities"`
+		Version      string                   `json:"version"`
+		Protocol     int                      `json:"protocol"`
+		Report       *report                  `json:"report,omitempty"`
+		Certificates []certificateObservation `json:"certificates,omitempty"`
+	}{platform, capabilities, version, 4, previous, nil}
+	// Deliver a completed lease before running potentially slow certificate issuance.
+	if previous == nil {
+		payload.Certificates = a.renewCertificates(ctx)
+	}
 	var response struct {
-		Job *job `json:"job"`
+		Job          *job   `json:"job"`
+		Acknowledged string `json:"acknowledgedTaskId"`
 	}
 	err := a.request(ctx, c, "poll", payload, &response)
 	if err != nil {
 		return nil, binary, err
 	}
-	if response.Job != nil && (!uuidPattern.MatchString(response.Job.ID) || !tokenPattern.MatchString(response.Job.Lease) || response.Job.Revision < 1) {
+	if response.Job != nil && (!uuidPattern.MatchString(response.Job.TaskID) || !tokenPattern.MatchString(response.Job.ConfigHash) || !uuidPattern.MatchString(response.Job.ID) || !tokenPattern.MatchString(response.Job.Lease) || response.Job.Revision < 1) {
 		return nil, binary, errors.New("invalid_response")
 	}
+	a.acknowledged = response.Acknowledged
 	return response.Job, binary, nil
 }
 func (a *agent) serve(ctx context.Context) error {
@@ -235,13 +227,36 @@ func (a *agent) serve(ctx context.Context) error {
 	if err = validateConfig(c); err != nil {
 		return err
 	}
+	pendingPath := filepath.Join(filepath.Dir(a.configFile), "pending-report.json")
 	var pending *report
+	if exists(pendingPath) {
+		data, err := readFile(pendingPath)
+		if err != nil {
+			return err
+		}
+		if json.Unmarshal(data, &pending) != nil {
+			return errors.New("invalid pending report")
+		}
+	}
+	a.progress = func(ctx context.Context, j job, phase string) {
+		var result struct{}
+		_ = a.request(ctx, c, "progress", map[string]any{"id": j.ID, "taskId": j.TaskID, "revision": j.Revision, "lease": j.Lease, "phase": phase}, &result)
+	}
 	for ctx.Err() == nil {
 		j, binary, err := a.poll(ctx, c, pending)
 		if err == nil {
-			pending = nil
-			if j != nil {
+			if pending != nil && a.acknowledged == pending.TaskID {
+				pending = nil
+				if err := removeFile(pendingPath); err != nil {
+					return err
+				}
+			}
+			if j != nil && (pending == nil || j.TaskID == pending.TaskID) {
 				pending = a.process(ctx, *j, binary)
+				data, _ := json.Marshal(pending)
+				if err := atomicWrite(pendingPath, data, 0600); err != nil {
+					return err
+				}
 				continue
 			}
 		} else if ctx.Err() == nil {
@@ -253,18 +268,32 @@ func (a *agent) serve(ctx context.Context) error {
 	}
 	return nil
 }
-func (a *agent) process(ctx context.Context, j job, binary string) *report {
-	r := &report{ID: j.ID, Lease: j.Lease, Status: "active"}
+func (a *agent) executeJob(ctx context.Context, j job, binary string) *report {
+	r := &report{TaskID: j.TaskID, ConfigHash: j.ConfigHash, ID: j.ID, Revision: j.Revision, Lease: j.Lease, Status: "active"}
 	var err error
 	switch j.Action {
 	case "delete":
-		err = a.deleteInstance(ctx, j)
+		err = a.deleteService(ctx, j)
 		r.Status = "deleted"
 	case "create", "update":
 		if binary == "" {
 			err = errors.New("unsupported_host")
 		} else {
-			err = a.createInstance(ctx, j, binary)
+			if err = validateService(j.serviceConfig); err == nil {
+				binary, err = a.ensureRuntime(ctx, j)
+			}
+			if err == nil {
+				err = a.applyService(ctx, j, binary)
+			}
+			if err == nil {
+				r.Implementation = j.RuntimeVersion
+				if j.Protocol == "snell" {
+					r.Implementation = "snell " + snellReleases[j.Version].version
+				}
+				if j.Certificate != nil {
+					r.Certificate, err = a.inspectCertificate(j)
+				}
+			}
 		}
 	default:
 		err = errors.New("invalid_config")
@@ -272,12 +301,22 @@ func (a *agent) process(ctx context.Context, j job, binary string) *report {
 	if err != nil {
 		code := err.Error()
 		switch code {
-		case "invalid_config", "port_in_use", "unsupported_host", "start_failed", "rollback_failed", "delete_failed":
+		case "state_conflict", "invalid_config", "port_in_use", "unsupported_host", "start_failed", "rollback_failed", "delete_failed", "certificate_failed", "download_failed":
 		default:
 			code = "internal_error"
 		}
 		r.Status = "failed"
 		r.Error = &code
+		if j.Action == "update" && j.Previous != nil && code != "rollback_failed" {
+			previous := j
+			previous.serviceConfig = *j.Previous
+			healthCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 40*time.Second)
+			r.Restored = a.previousHealthy(healthCtx, previous)
+			cancel()
+		}
+	}
+	if r.Status == "active" || r.Restored {
+		r.CheckedAt = time.Now().Unix()
 	}
 	return r
 }

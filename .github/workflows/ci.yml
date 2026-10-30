@@ -7,7 +7,11 @@ permissions:
   contents: read
 jobs:
   verify:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +25,7 @@ jobs:
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -race -count=1 ./...
-      - run: node scripts/build.mjs v1.0.0
+      - run: node scripts/build.mjs v3.0.0
       - name: Verify static binaries and installer
         run: |
           file dist/tower-agent-linux-* | tee /tmp/tower-binaries.txt
@@ -29,10 +33,10 @@ jobs:
           sh -n dist/install.sh
           (cd dist && sha256sum -c checksums.txt)
           go test -count=1 -run TestBootstrap ./...
-      - name: Exercise real Linux systemd and sing-box
+      - name: Exercise real Linux systemd, Snell and sing-box
         run: sudo --preserve-env=PATH env TOWER_SYSTEMD_TEST=1 "$(command -v go)" test -count=1 -v -run TestSystemdLifecycle ./...
       - uses: actions/upload-artifact@v4
         with:
-          name: tower-agent-binaries
+          name: tower-agent-binaries-${{ matrix.runner }}
           path: dist/
           retention-days: 7

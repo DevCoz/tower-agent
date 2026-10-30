@@ -179,14 +179,15 @@ func (a *agent) verifyCredential(ctx context.Context, c config) error {
 		return err
 	}
 	var response struct {
-		OK bool `json:"ok"`
+		OK       bool `json:"ok"`
+		Protocol int  `json:"protocol"`
 	}
-	if a.request(ctx, c, "probe", struct{}{}, &response) != nil || !response.OK {
+	if a.request(ctx, c, "probe", struct{}{}, &response) != nil || !response.OK || response.Protocol != 4 {
 		return errors.New("Agent credential verification failed; configuration was not changed")
 	}
 	return nil
 }
-func (a *agent) install(ctx context.Context, origin, id string, withRuntime bool) error {
+func (a *agent) install(ctx context.Context, origin, id string) error {
 	if !rootLinux() {
 		return errors.New("run the installer as root on Linux")
 	}
@@ -216,14 +217,6 @@ func (a *agent) install(ctx context.Context, origin, id string, withRuntime bool
 		return err
 	}
 	defer unlockInstall()
-	if withRuntime {
-		if err = a.installRuntime(ctx); err != nil {
-			return err
-		}
-	}
-	if binary, _ := a.capabilities(ctx); binary == "" {
-		return errors.New("install sing-box 1.14.3+ or use --install-sing-box")
-	}
 	if err = makeDirectory(filepath.Dir(a.binaryFile), 0755); err != nil {
 		return err
 	}

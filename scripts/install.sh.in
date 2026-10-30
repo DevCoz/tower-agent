@@ -12,7 +12,7 @@ case "$(uname -m)" in
   aarch64|arm64) ARCH=arm64; SHA256='__ARM64_SHA256__' ;;
   *) die 'Supported architectures: amd64 and arm64.' ;;
 esac
-case "${1:-}" in install) ;; *) die 'Use: install --url HTTPS_ORIGIN --id UUID [--install-sing-box]' ;; esac
+case "${1:-}" in install) ;; *) die 'Use: install --url HTTPS_ORIGIN --id UUID' ;; esac
 command -v sha256sum >/dev/null 2>&1 || die 'sha256sum is required.'
 
 # Stage on the installation filesystem, so /tmp mounted noexec is supported.
@@ -35,5 +35,5 @@ else
 fi
 printf '%s  %s\n' "$SHA256" "$payload" | sha256sum -c - >/dev/null || die 'SHA-256 mismatch; downloaded program was not executed.'
 chmod 700 "$payload"
-[ "$("$payload" version)" = "Tower Agent $VERSION (protocol 2)" ] || die 'Unexpected Agent version.'
+[ "$("$payload" version)" = "Tower Agent $VERSION (protocol 4)" ] || die 'Unexpected Agent version.'
 "$payload" "$@"

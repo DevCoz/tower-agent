@@ -28,7 +28,7 @@ for (const arch of ['amd64', 'arm64']) {
 const installer = readFileSync(join(root, 'scripts/install.sh.in'), 'utf8')
   .replaceAll('__VERSION__', version).replaceAll('__AMD64_SHA256__', assets.amd64.sha256).replaceAll('__ARM64_SHA256__', assets.arm64.sha256);
 writeFileSync(join(root, 'dist/install.sh'), installer, { mode: 0o755 });
-writeFileSync(join(root, 'dist/manifest.json'), JSON.stringify({ version, protocol: 2, assets }, null, 2) + '\n');
+writeFileSync(join(root, 'dist/manifest.json'), JSON.stringify({ version, protocol: 4, assets }, null, 2) + '\n');
 const files = [...Object.values(assets).map(a => a.name), 'install.sh', 'manifest.json'];
 writeFileSync(join(root, 'dist/checksums.txt'), files.map(name => `${createHash('sha256').update(readFileSync(join(root, 'dist', name))).digest('hex')}  ${name}\n`).join(''));
 console.log(`Built ${version}: ${files.join(', ')}`);

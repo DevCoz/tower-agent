@@ -26,16 +26,16 @@ func TestBootstrap(t *testing.T) {
 			installed := filepath.Join(root, "installed")
 			download := filepath.Join(root, "download")
 			stageBase := filepath.Join(root, "opt", "tower-agent")
-			payload := "#!/bin/sh\nif [ \"$1\" = version ]; then printf '%s\\n' 'Tower Agent v1.0.0 (protocol 2)'; else printf '%s\\n' \"$@\" > '" + installed + "'; fi\n"
+			payload := "#!/bin/sh\nif [ \"$1\" = version ]; then printf '%s\\n' 'Tower Agent v3.0.0 (protocol 4)'; else printf '%s\\n' \"$@\" > '" + installed + "'; fi\n"
 			if scenario == "wrong-version" {
-				payload = strings.ReplaceAll(payload, "v1.0.0", "v0.0.0")
+				payload = strings.ReplaceAll(payload, "v3.0.0", "v0.0.0")
 			}
 			requireNoError(t, os.WriteFile(download, []byte(payload), 0700))
 			checksum := digest(payload)
 			if scenario == "bad-checksum" {
 				checksum = strings.Repeat("0", 64)
 			}
-			installer := strings.NewReplacer("__VERSION__", "v1.0.0", "__AMD64_SHA256__", checksum, "__ARM64_SHA256__", checksum, "/opt/tower-agent", stageBase).Replace(template)
+			installer := strings.NewReplacer("__VERSION__", "v3.0.0", "__AMD64_SHA256__", checksum, "__ARM64_SHA256__", checksum, "/opt/tower-agent", stageBase).Replace(template)
 			path := filepath.Join(root, "install.sh")
 			requireNoError(t, os.WriteFile(path, []byte(installer), 0700))
 			arch := "x86_64"

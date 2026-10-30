@@ -71,7 +71,7 @@ func fixture(t *testing.T) (*agent, *fakeSystem, job) {
 	t.Helper()
 	root := t.TempDir()
 	a := newAgent()
-	a.base = filepath.Join(root, "instances")
+	a.base = filepath.Join(root, "services")
 	a.units = filepath.Join(root, "units")
 	a.configFile = filepath.Join(root, "etc", "config.json")
 	a.binaryFile = filepath.Join(root, "opt", "tower-agent")
@@ -85,7 +85,9 @@ func fixture(t *testing.T) (*agent, *fakeSystem, job) {
 	a.run = f.run
 	a.port = func(int, bool) error { return nil }
 	a.wait = func(context.Context, time.Duration) error { return nil }
-	j := job{ID: "11223344-5566-4788-99aa-bbccddeeff00", Lease: strings.Repeat("a", 64), Revision: 1, Action: "create", instanceConfig: instanceConfig{Port: 18388, Password: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 16)), Method: "2022-blake3-aes-128-gcm", IPv6: true}}
+	a.health = func(context.Context, job) error { return nil }
+	j := job{TaskID: "21223344-5566-4788-99aa-bbccddeeff00", ConfigHash: strings.Repeat("c", 64), ID: "11223344-5566-4788-99aa-bbccddeeff00", Lease: strings.Repeat("a", 64), Revision: 1, Action: "create", serviceConfig: serviceConfig{RuntimeVersion: "1.14.3", Protocol: "shadowsocks", Port: 18388, Password: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 16)), Method: "2022-blake3-aes-128-gcm", IPv6: true}}
+	j.ConfigHash = serviceDigest(j.serviceConfig)
 	return a, f, j
 }
 func requireNoError(t *testing.T, err error) {
@@ -108,7 +110,7 @@ func read(t *testing.T, path string) string {
 }
 func provision(t *testing.T, a *agent, j job) definition {
 	t.Helper()
-	requireNoError(t, a.createInstance(context.Background(), j, "/usr/bin/sing-box"))
+	requireNoError(t, a.applyService(context.Background(), j, "/usr/bin/sing-box"))
 	d, err := a.define(j, "/usr/bin/sing-box")
 	requireNoError(t, err)
 	return d
@@ -130,7 +132,7 @@ func TestIsolatedInstanceAndReplay(t *testing.T) {
 		t.Fatal("not provisioned")
 	}
 	f.calls = nil
-	requireNoError(t, a.createInstance(context.Background(), j, "/usr/bin/sing-box"))
+	requireNoError(t, a.applyService(context.Background(), j, "/usr/bin/sing-box"))
 	if len(f.calls) != 1 || f.calls[0][1] != "is-active" {
 		t.Fatalf("replay restarted: %v", f.calls)
 	}
@@ -140,7 +142,7 @@ func TestInvalidJobsAndUnsupportedCiphers(t *testing.T) {
 	for _, mutate := range []func(*job){func(j *job) { j.ID = "../escape" }, func(j *job) { j.Port = 22 }, func(j *job) { j.Port = 65536 }, func(j *job) { j.Password = "wrong" }, func(j *job) { j.Method = "aes-128-gcm" }, func(j *job) { j.Method = "2022-blake3-chacha20-poly1305" }, func(j *job) { j.Password += "\n" }, func(j *job) { j.Action = "update" }} {
 		j := valid
 		mutate(&j)
-		requireError(t, a.createInstance(context.Background(), j, "/usr/bin/sing-box"), "invalid_config")
+		requireError(t, a.applyService(context.Background(), j, "/usr/bin/sing-box"), "invalid_config")
 	}
 	for _, body := range []string{`{"port":true}`, `{"port":1.5}`, `{"ipv6":"true"}`} {
 		var j job
@@ -165,13 +167,13 @@ func TestValidationAndPortConflictPreserveRunningInstance(t *testing.T) {
 	original := read(t, d.configPath)
 	edit := j
 	edit.Action = "update"
-	edit.Previous = &j.instanceConfig
+	edit.Previous = &j.serviceConfig
 	edit.Port++
 	f.fail = func(args []string) bool { return len(args) > 1 && args[1] == "check" }
-	requireError(t, a.createInstance(context.Background(), edit, "/usr/bin/sing-box"), "invalid_config")
+	requireError(t, a.applyService(context.Background(), edit, "/usr/bin/sing-box"), "invalid_config")
 	f.fail = nil
 	a.port = func(int, bool) error { return errors.New("port_in_use") }
-	requireError(t, a.createInstance(context.Background(), edit, "/usr/bin/sing-box"), "port_in_use")
+	requireError(t, a.applyService(context.Background(), edit, "/usr/bin/sing-box"), "port_in_use")
 	if !f.active[d.service] || read(t, d.configPath) != original {
 		t.Fatal("validation disrupted original instance")
 	}
@@ -182,24 +184,24 @@ func TestUpdateReplayAndRollback(t *testing.T) {
 	original := read(t, d.configPath)
 	edit := j
 	edit.Action = "update"
-	edit.Previous = &j.instanceConfig
+	edit.Previous = &j.serviceConfig
 	edit.Port++
 	edit.Method = "2022-blake3-aes-256-gcm"
 	edit.Password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("y"), 32))
 	f.fail = func(args []string) bool { return args[1] == "enable" }
-	requireError(t, a.createInstance(context.Background(), edit, "/usr/bin/sing-box"), "start_failed")
+	requireError(t, a.applyService(context.Background(), edit, "/usr/bin/sing-box"), "start_failed")
 	if read(t, d.configPath) != original || !f.active[d.service] {
 		t.Fatal("rollback did not restore original")
 	}
 	f.fail = func(args []string) bool { return args[1] == "enable" || args[1] == "start" }
-	requireError(t, a.createInstance(context.Background(), edit, "/usr/bin/sing-box"), "rollback_failed")
+	requireError(t, a.applyService(context.Background(), edit, "/usr/bin/sing-box"), "rollback_failed")
 	f.fail = nil
-	requireNoError(t, a.createInstance(context.Background(), edit, "/usr/bin/sing-box"))
+	requireNoError(t, a.applyService(context.Background(), edit, "/usr/bin/sing-box"))
 	if !strings.Contains(read(t, d.configPath), edit.Password) {
 		t.Fatal("new key missing")
 	}
 	f.calls = nil
-	requireNoError(t, a.createInstance(context.Background(), edit, "/usr/bin/sing-box"))
+	requireNoError(t, a.applyService(context.Background(), edit, "/usr/bin/sing-box"))
 	if len(f.calls) != 1 {
 		t.Fatal("update replay restarted service")
 	}
@@ -209,7 +211,7 @@ func TestFailedCreateOnlyRemovesOwnedUnit(t *testing.T) {
 	unrelated := filepath.Join(a.units, "unrelated.service")
 	requireNoError(t, os.WriteFile(unrelated, []byte("keep"), 0644))
 	f.fail = func(args []string) bool { return args[1] == "enable" }
-	requireError(t, a.createInstance(context.Background(), j, "/usr/bin/sing-box"), "start_failed")
+	requireError(t, a.applyService(context.Background(), j, "/usr/bin/sing-box"), "start_failed")
 	entries, err := os.ReadDir(a.units)
 	requireNoError(t, err)
 	if len(entries) != 1 || read(t, unrelated) != "keep" {
@@ -221,8 +223,8 @@ func TestOwnershipAndSymlinkProtection(t *testing.T) {
 	d, err := a.define(j, "/usr/bin/sing-box")
 	requireNoError(t, err)
 	requireNoError(t, os.WriteFile(d.unitPath, []byte("unrelated"), 0644))
-	requireError(t, a.createInstance(context.Background(), j, "/usr/bin/sing-box"), "invalid_config")
-	requireError(t, a.deleteInstance(context.Background(), j), "invalid_config")
+	requireError(t, a.applyService(context.Background(), j, "/usr/bin/sing-box"), "invalid_config")
+	requireError(t, a.deleteService(context.Background(), j), "invalid_config")
 	if len(f.calls) != 0 || read(t, d.unitPath) != "unrelated" {
 		t.Fatal("touched unrelated service")
 	}
@@ -232,7 +234,7 @@ func TestOwnershipAndSymlinkProtection(t *testing.T) {
 	requireNoError(t, os.Remove(d.unitPath))
 	outside := t.TempDir()
 	requireNoError(t, os.Symlink(outside, a.base))
-	requireError(t, a.createInstance(context.Background(), j, "/usr/bin/sing-box"), "unsupported_host")
+	requireError(t, a.applyService(context.Background(), j, "/usr/bin/sing-box"), "unsupported_host")
 	entries, err := os.ReadDir(outside)
 	requireNoError(t, err)
 	if len(entries) != 0 {
@@ -243,17 +245,17 @@ func TestDeleteRequiresStopAndIsIdempotent(t *testing.T) {
 	a, f, j := fixture(t)
 	d := provision(t, a, j)
 	f.fail = func(args []string) bool { return args[1] == "stop" }
-	requireError(t, a.deleteInstance(context.Background(), j), "delete_failed")
+	requireError(t, a.deleteService(context.Background(), j), "delete_failed")
 	if !exists(d.unitPath) || !exists(d.configPath) {
 		t.Fatal("deleted active instance")
 	}
 	f.fail = nil
 	unrelated := filepath.Join(d.directory, "unrelated")
 	requireNoError(t, os.WriteFile(unrelated, []byte("keep"), 0600))
-	requireError(t, a.deleteInstance(context.Background(), j), "unsupported_host")
+	requireError(t, a.deleteService(context.Background(), j), "unsupported_host")
 	requireNoError(t, os.Remove(unrelated))
-	requireNoError(t, a.deleteInstance(context.Background(), j))
-	requireNoError(t, a.deleteInstance(context.Background(), j))
+	requireNoError(t, a.deleteService(context.Background(), j))
+	requireNoError(t, a.deleteService(context.Background(), j))
 	if exists(d.directory) || exists(d.unitPath) {
 		t.Fatal("instance files remain")
 	}
@@ -261,11 +263,11 @@ func TestDeleteRequiresStopAndIsIdempotent(t *testing.T) {
 func TestDeletePendingConfigAndForeignFragment(t *testing.T) {
 	a, f, j := fixture(t)
 	d := provision(t, a, j)
-	pending := j.instanceConfig
+	pending := j.serviceConfig
 	pending.Port++
 	j.Pending = &pending
 	changed := j
-	changed.instanceConfig = pending
+	changed.serviceConfig = pending
 	target, err := a.define(changed, "/usr/bin/sing-box")
 	requireNoError(t, err)
 	requireNoError(t, atomicWrite(d.configPath, []byte(target.config), 0600))
@@ -275,15 +277,18 @@ func TestDeletePendingConfigAndForeignFragment(t *testing.T) {
 		}
 		return f.run(ctx, args...)
 	}
-	requireError(t, a.deleteInstance(context.Background(), j), "invalid_config")
+	requireError(t, a.deleteService(context.Background(), j), "invalid_config")
 	a.run = f.run
-	requireNoError(t, a.deleteInstance(context.Background(), j))
+	requireNoError(t, a.deleteService(context.Background(), j))
 }
 func TestHTTPTokenVerificationAndRedirectRejection(t *testing.T) {
 	a, _, j := fixture(t)
 	var action string
 	redirected := 0
-	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { redirected++; w.Write([]byte(`{"ok":true}`)) }))
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirected++
+		w.Write([]byte(`{"ok":true,"protocol":4}`))
+	}))
 	defer target.Close()
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+j.Lease {
@@ -296,7 +301,7 @@ func TestHTTPTokenVerificationAndRedirectRejection(t *testing.T) {
 		if !strings.HasSuffix(r.URL.Path, "/probe") {
 			t.Error("installation reserved a job")
 		}
-		w.Write([]byte(`{"ok":true}`))
+		w.Write([]byte(`{"ok":true,"protocol":4}`))
 	}))
 	defer server.Close()
 	a.client.Transport = server.Client().Transport
@@ -320,7 +325,7 @@ func TestPollReportsAndResponseValidation(t *testing.T) {
 		calls++
 		var input map[string]any
 		requireNoError(t, json.NewDecoder(r.Body).Decode(&input))
-		if input["protocol"] != float64(2) || input["report"].(map[string]any)["lease"] != j.Lease {
+		if input["protocol"] != float64(4) || input["report"].(map[string]any)["lease"] != j.Lease {
 			t.Error("protocol/report changed")
 		}
 		switch mode {
@@ -357,14 +362,6 @@ func TestPollReportsAndResponseValidation(t *testing.T) {
 	}
 }
 func TestRuntimeVersionsAndArchiveValidation(t *testing.T) {
-	for _, c := range []struct {
-		version string
-		valid   bool
-	}{{"1.14.2", false}, {"1.14.3-beta.1", false}, {"1.14.3", true}, {"1.14.4", true}, {"1.15.0", true}} {
-		if supportsRuntime("sing-box version "+c.version) != c.valid {
-			t.Fatal(c.version)
-		}
-	}
 	archive := func(kind byte) []byte {
 		var out bytes.Buffer
 		gz := gzip.NewWriter(&out)
@@ -424,6 +421,8 @@ func TestPortConflictAndAtomicWrite(t *testing.T) {
 }
 func TestErrorReportDoesNotLeakCommandOutput(t *testing.T) {
 	a, f, j := fixture(t)
+	j.Protocol = "invalid"
+	j.ConfigHash = serviceDigest(j.serviceConfig)
 	f.fail = func([]string) bool { return true }
 	r := a.process(context.Background(), j, "/usr/bin/sing-box")
 	if r.Error == nil || *r.Error != "invalid_config" {
@@ -433,6 +432,8 @@ func TestErrorReportDoesNotLeakCommandOutput(t *testing.T) {
 	if strings.Contains(string(data), j.Password) {
 		t.Fatal("leaked password")
 	}
+	j.TaskID = "31223344-5566-4788-99aa-bbccddeeff00"
+	j.Revision = 2
 	j.Action = "execute-shell"
 	r = a.process(context.Background(), j, "/usr/bin/sing-box")
 	if *r.Error != "invalid_config" {

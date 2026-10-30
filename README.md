@@ -1,61 +1,64 @@
-# Tower Agent
+# Tower Agent v3
 
-Tower Panel 的独立 Linux Agent，通过 GitHub Releases 分发 Go 静态二进制。
+Tower Panel 协议 4 的 Linux 执行器。一个 Agent 管理一台服务器的服务，全程使用结构化任务，无远程 shell 接口。
 
-通过专用 Agent 令牌连接面板，管理隔离的 sing-box 实例：创建、修改、失败回滚、删除，以及任务结果上报。只支持 Shadowsocks AEAD 2022 AES-128-GCM / AES-256-GCM。
+| 协议 | 执行程序 |
+| --- | --- |
+| Snell V5 / V6 | 官方 v5.0.1 / v6.0.0rc2 |
+| Shadowsocks AEAD 2022 AES-128 / AES-256 | sing-box 1.14.3 |
+| Trojan / AnyTLS | sing-box 1.14.3 + Agent 管理的 TLS 证书 |
 
 ## 安装
 
-要求 Linux amd64 / arm64、root 权限、正在运行的 systemd 247+、CA 证书、curl 或 wget，以及 sha256sum。sing-box 默认下载固定的 1.14.3 并校验官方 SHA-256；也可自行预装 1.14.3+。
-
-在 Tower Panel 的 Agent 页面生成连接信息，执行页面命令。通用格式：
+需要 Linux amd64/arm64、root、systemd 247+、CA 证书、curl 或 wget、sha256sum。在面板“服务器”创建连接并执行生成的命令，在隐藏输入提示中粘贴专用 Agent 令牌。
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/DevCoz/tower-agent/releases/latest/download/install.sh -o tower-agent-install.sh &&
-sudo sh tower-agent-install.sh install --install-sing-box --url 'https://YOUR-PANEL.example' --id 'YOUR-AGENT-UUID'
+sudo ./tower-agent-linux-amd64 install --url 'https://YOUR-PANEL.example' --id 'YOUR-SERVER-UUID'
 ```
 
-在终端隐藏输入提示处粘贴专用 Agent 令牌。不要把面板管理员密码、Cloudflare 或 GitHub 凭据填入此处。安装器先通过 `/api/agents/:id/probe` 验证令牌，再安装服务；不会在探测时领取任务。
+安装先验证 HTTPS 面板和协议 4，再安装 Agent 自身。代理运行程序在首个服务任务中按需下载并校验固定 SHA-256，未知版本、架构或用户提供的下载地址不被接受。
 
-## 运行与更新
+v3.0.0 为此版本的发布目标；执行 node scripts/build.mjs v3.0.0 只生成本地产物，不会创建 GitHub Release。必须完成 Linux CI 并发布产物后，面板安装命令才可使用。
 
-```sh
-sudo /opt/tower-agent/tower-agent version
-sudo systemctl status tower-agent
-sudo journalctl -u tower-agent -f
-```
+## 生命周期
 
-需要更新时重新运行指定 Release 的安装脚本。更新前下载、校验二进制；替换失败时恢复原 Agent 文件。需要轮换连接令牌时，在面板选择“重新连接”并重新执行安装命令。
+服务统一为 tower-proxy-<uuid>.service，私有配置在 /var/lib/tower-panel/services/<uuid>/。服务以 DynamicUser 运行，配置和 TLS 私钥通过 LoadCredential 读取。Agent 程序位于 /opt/tower-agent/tower-agent，连接配置位于 /etc/tower-agent/config.json。
 
-| 内容 | 路径 |
-| --- | --- |
-| Agent 程序 | `/opt/tower-agent/tower-agent` |
-| Agent 配置（权限 0600） | `/etc/tower-agent/config.json` |
-| 服务 | `tower-agent.service` |
-| 专用 sing-box | `/opt/tower-agent/sing-box-1.14.3/sing-box` |
-| 实例配置 | `/var/lib/tower-panel/instances/<uuid>/config.json` |
-| 实例服务 | `tower-sing-box-<uuid>.service` |
+创建和更新先检查输入、受管 unit/config 归属、端口和候选配置，再启动并检查进程与本地 TCP/TLS。Snell 使用严格生成的 INI；sing-box 候选运行 check 子命令。失败更新恢复原配置；重复任务核对摘要及健康后直接回报，不重复重启。
 
-实例以 systemd DynamicUser 运行，通过 LoadCredential 读取密钥。更新先检查候选配置，启动失败时恢复原配置；删除先确认服务停止，再移除受管文件。Agent 不会覆盖内容不匹配的服务或配置。对面板的 Bearer 请求不跟随重定向，日志不输出令牌、密钥或命令诊断内容。
+每 15 秒轮询，任务租约 15 分钟。回报包含任务 ID、修订和租约；命令诊断不回传，防止泄露密码。卸载确认服务停止后移除 unit、配置、证书和专用 ACME 资料。
 
-通信使用 Tower Agent 协议 2，每 15 秒轮询；没有入站监听端口。每台宿主安装一个 Agent，开放实例所需的 TCP / UDP 端口。
+仅支持协议 4。旧协议、旧 instances 目录与 tower-sing-box 单元不会自动接管，仅对新安装的面板和新节点执行结构化任务，不提供旧环境迁移。
 
-## 开发与发布
+## 证书
 
-构建需要 `go.mod` 指定的 Go 版本及 Node.js 22+；运行服务器无需这些工具。
+自签证书由 Go crypto 生成，续期复用私钥。ACME 使用主机已安装的 certbot，域名须解析到该服务器且 TCP 80 空闲可达。Agent 不自动安装系统依赖、修改 DNS 或防火墙。
+
+约每 6 小时检查每个证书，剩余 30 天内续期。单次轮询最多处理一个证书。证书不变不重启；失败恢复原文件并上报 renewal_failed。TLS 健康检查校验证书名称、有效期，并比较本地握手指纹。面板不接收证书私钥。
+
+域名和签发模式在服务创建后固定；修改这些身份字段需创建新服务。
+
+## 开发与验证
 
 ```sh
-go test -race ./...
+go test ./...
 go vet ./...
-node scripts/build.mjs v1.0.0
+node scripts/build.mjs v3.0.0
 ```
 
-构建使用 `CGO_ENABLED=0`，输出 amd64 / arm64 静态二进制、含固定校验值的 `install.sh`、`manifest.json` 及 `checksums.txt`。`scripts/install.sh.in` 是模板，不能直接用作安装脚本。
+构建使用 go.mod 指定版本，CGO_ENABLED=0，输出两个架构二进制、install.sh、manifest.json、checksums.txt。模板 scripts/install.sh.in 不可直接运行。
 
-CI 在临时目录验证任务、安装回滚和下载校验，并在独立 Ubuntu runner 上使用真实 systemd / sing-box 验证实例生命周期。标签 `vX.Y.Z` 触发同样检查，成功后才发布 GitHub Release。
+CI 在 Ubuntu 上执行 race 测试和四协议真实 systemd 创建/更新/回滚/卸载测试。仅在隔离 Linux runner 显式设置 TOWER_SYSTEMD_TEST=1 运行这些测试。Windows 本地单元测试不能替代 systemd 集成验证；ACME 的公网 DNS/HTTP-01 需要单独的可达测试环境。
 
-安装与二进制分发方式参考 [cfsm-agent](https://github.com/huilang-me/cfsm-agent)；Tower 的实例编排与通信逻辑独立实现。
+```sh
+sudo systemctl status tower-agent
+sudo journalctl -u tower-agent
+sudo systemctl status tower-proxy-<uuid>
+```
 
-## 许可证
+GPL-3.0；参阅 LICENSE。
+## 持久任务
 
-使用 GPL-3.0 许可证，完整条款见 [LICENSE](LICENSE)。
+任务携带 taskId、节点 revision、租约、精确运行版本和配置摘要。`/etc/tower-agent/tasks/` 保存任务摘要、结果及最高 revision，`pending-report.json` 保留待确认回执；均不保存服务密码。相同任务重新投递时返回已保存结果，旧 revision 被拒绝。更新期间 recovery.json 保存原 unit，供进程重启后的失败恢复使用。
+
+阶段回报为 running、verifying、rolling_back。最终失败仅在原配置和本机健康都确认后标记 restored。服务主动回滚由面板发送新的 update 任务完成。
